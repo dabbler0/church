@@ -194,46 +194,45 @@ class PrintMap:
             self.map[var] = self.cid_to_name(self.cid)
             self.cid += 1
         return self.map[var]
+
 class Wrap:
     def __init__(self, pair, normal_form = False):
         self.pair = pair
         self.normal_form = normal_form
         self.contains_cache = {}
-        self.variables_cache = None
+        self.free_variables_cache = None
         self.parameters_cache = None
 
-    def alpha(self, amap):
+    def alpha(self, amap = {}):
         '''
         Perform an alpha transformation to avoid
         reusing the given variables.
         '''
 
-        # If we are unchanged, return ourself
-        if len(amap.keys() & self.variables()) == 0:
-            return self
-
         if type(self.pair) is int:
-            return Wrap(amap[self.pair] if self.pair in amap else self.pair,
-                    self.normal_form)
+            if self.pair in amap:
+                self.pair = amap[self.pair]
 
         if type(self.pair) is SPair:
-            return Wrap(SPair(
-                self.pair.head.alpha(amap),
-                self.pair.tail.alpha(amap)
-            ), self.normal_form)
+            self.pair.head.alpha(amap),
+            self.pair.tail.alpha(amap)
 
         if type(self.pair) is LPair:
-            return Wrap(LPair(
-                (amap[self.pair.param] if self.pair.param in amap else self.pair.param),
-                self.pair.body.alpha(amap)
-            ), self.normal_form)
+            v = newvar()
+            self.pair.body.alpha({**amap, self.pair.param: v})
+            self.pair.param = v
 
         # If we are wrapping a wrap,
         # take this opportunity to unwrap it.
         if type(self.pair) is Wrap:
-            return self.pair.alpha(amap)
+            self.pair.alpha(amap)
 
-    def bind(self, var, value):
+        # Reset all these queries
+        self.free_variables_cache = None
+        self.parameters_cache = None
+        self.contains_cache = {}
+
+    def bind(self, map):
         '''
         Substitute returns a *new* Wrap.
 
@@ -244,30 +243,34 @@ class Wrap:
         # For more efficient computation,
         # preserve work across substitutions
         # where possible.
-        if var not in self:
+        if len(map.keys() & self.free_variables()) == 0:
             return self
 
         if type(self.pair) is int:
-            if self.pair == var:
-                return value
+            if self.pair in map:
+                return map[self.pair]
             return self
 
         if type(self.pair) is SPair:
             return Wrap(SPair(
-                self.pair.head.bind(var, value),
-                self.pair.tail.bind(var, value)
+                self.pair.head.bind(map),
+                self.pair.tail.bind(map)
             ))
 
         if type(self.pair) is LPair:
+            v = newvar()
             return Wrap(LPair(
-                self.pair.param,
-                self.pair.body.bind(var, value)
+                v,
+                self.pair.body.bind({
+                    self.pair.param: Wrap(v),
+                    **{key: val for key, val in map.items() if key != self.pair.param}
+                })
             ))
 
         # If we are wrapping a wrap,
         # take this opportunity to unwrap it.
         if type(self.pair) is Wrap:
-            return self.pair.bind(var, value)
+            return self.pair.bind(map)
 
     def __contains__(self, var):
         if var not in self.contains_cache:
@@ -281,17 +284,17 @@ class Wrap:
                 self.contains_cache[var] = (var != self.pair.param) and (var in self.pair.body)
         return self.contains_cache[var]
 
-    def variables(self):
-        if self.variables_cache is None:
+    def free_variables(self):
+        if self.free_variables_cache is None:
             if type(self.pair) is int:
-                self.variables_cache = {self.pair}
+                self.free_variables_cache = {self.pair}
             elif type(self.pair) is Wrap:
-                self.variables_cache = self.pair.variables()
+                self.free_variables_cache = self.pair.free_variables()
             elif type(self.pair) is SPair:
-                self.variables_cache = self.pair.head.variables() | self.pair.tail.variables()
+                self.free_variables_cache = self.pair.head.free_variables() | self.pair.tail.free_variables()
             elif type(self.pair) is LPair:
-                self.variables_cache = {self.pair.param} | self.pair.body.variables()
-        return self.variables_cache
+                self.free_variables_cache = self.pair.body.free_variables() - {self.pair.param}
+        return self.free_variables_cache
 
     def parameters(self):
         if self.parameters_cache is None:
@@ -316,14 +319,11 @@ class Wrap:
             # If the head is in lambda form,
             # or is a wrap of something in lambda form,
             # reduce it once and then substitute.
-            hpair = self.pair.head.pair
-            hpair = hpair.pair if type(hpair) is Wrap else hpair
-            if type(hpair) is LPair:
-                amap = {v: newvar() for v in self.pair.tail.parameters()}
-                self.pair = hpair.body.alpha(amap).bind(
-                    (amap[hpair.param] if hpair.param in amap else hpair.param),
-                    self.pair.tail
-                )
+            h = self.pair.head
+            h = h.pair if type(h.pair) is Wrap else h
+            if type(h.pair) is LPair:
+                tail = self.pair.tail
+                self.pair = h.pair.body.bind({h.pair.param: tail})
                 return 'beta'
 
             # Otherwise, try reducing the head.
@@ -532,9 +532,7 @@ def run_text(text, w):
             if len(unbound) > 0:
                 lines.append('Warning: the following symbols are unbound: %s' % (', ').join(unbound))
                 lines.append('Proceeding with unbound symbols.')
-            for m, v in macros.items():
-                if m in nmap.unbound_map:
-                    w = w.bind(nmap.name(m), v)
+            w = w.bind({nmap.name(m): v for m, v in macros.items()})
             macros[symbol] = w
 
         if text[:4] == '!see':
@@ -548,9 +546,7 @@ def run_text(text, w):
             if len(unbound) > 0:
                 lines.append('Warning: the following symbols are unbound: %s' % (', ').join(unbound))
                 lines.append('Proceeding with unbound symbols.')
-            for m, v in macros.items():
-                if m in nmap.unbound_map:
-                    w = w.bind(nmap.name(m), v)
+            w = w.bind({nmap.name(m): v for m, v in macros.items()})
             lines.append(w)
 
         if text[:5] ==  '!gopt':
@@ -564,9 +560,7 @@ def run_text(text, w):
     if len(unbound) > 0:
         lines.append('Warning: the following symbols are unbound: %s' % (', ').join(unbound))
         lines.append('Proceeding with unbound symbols.')
-    for m, v in macros.items():
-        if m in nmap.unbound_map:
-            w = w.bind(nmap.name(m), v)
+    w = w.bind({nmap.name(m): v for m, v in macros.items()})
     w.normalize()
     if w.normal_form:
         lines.append(w)
