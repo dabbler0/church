@@ -1,0 +1,63 @@
+; Fixed point combinator
+!let Y f. (x. f (x x)) (x. f (x x))
+
+; Booleans
+!let #t x. y. x
+!let #f x. y. y
+!let and x. y. x y #f
+!let or x. y. x #t y
+!let not x. x #f #t
+!let xor x. y. x (not y) y
+!let if a.b.c.a b c
+
+; Church numerals
+!let 0c #f
+!let cinc n. f. x. f (n f x)
+!let 1c cinc 0c
+!let 2c cinc 1c
+!let +c a. b. f. x. (a f) (b f x)
+!let *c a. b. f. a (b f)
+
+; Church lists
+!let pair a. b. c. c a b
+!let nil pair #t #t
+!let isnil l. l #t
+!let car l. l #f #t
+!let cdr l. l #f #f
+!let cons a. l. pair #f (pair a  l)
+
+; Binary numerals
+!let 0b nil
+!let binc Y binc. n. if (isnil n) (cons #t nil) (if (car n) (cons #f (binc (cdr n))) (cons #t (cdr n)))
+!let 1b binc 0b
+!let 2b binc 1b
+
+; Conversion to Church numerals
+!let b_to_c Y b_to_c. n. if (isnil n) 0c (+c ((car n) 1c 0c) (*c 2c (b_to_c (cdr n))))
+
+; Binary addition
+!let +b_ Y +b_. x. y. carry.
+  if (isnil x)
+    (carry (binc y) y)
+  (if (isnil y)
+    (carry (binc x) x)
+  (cons
+    (xor carry (xor (car x) (car y)))
+    (+b_
+      (cdr x)
+      (cdr y)
+      (carry ((car x) #t (car y)) ((car x) (car y) #f))
+    )
+  ))
+
+!let +b Y +b. x. y. +b_ x y #f
+!let >>b n. (cons #f n)
+
+; Binary multiplication
+!let *b Y *b. x. y.
+  if (isnil x)
+    0b
+  (if (car x)
+    (+b y (>>b (*b (cdr x) y)))
+    (>>b (*b (cdr x) y))
+  )
